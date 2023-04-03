@@ -16,6 +16,7 @@ package file
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -449,6 +450,43 @@ func TestUpdateFileWithPartialWrites(t *testing.T) {
 			},
 		},
 	)
+}
+
+func TestUpdateFileOnlyAddressChange(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t)
+	sdFile := runner.copyFile("fixtures/valid_mimic_k8s_sd.json")
+
+	runner.run("*.json")
+	defer runner.stop()
+
+	// Verify that we receive the initial target groups.
+	runner.requireUpdate(time.Time{}, validMimicK8sTg(sdFile, "abc"))
+
+	// update the file with new pods
+	runner.copyFileTo("fixtures/valid_mimic_k8s_sd_new_pod.json", "valid_mimic_k8s_sd.json")
+
+	// Verify that we receive the update target groups once the file is a valid YAML payload.
+	runner.requireUpdate(time.Time{}, validMimicK8sTg(sdFile, "bar"))
+}
+
+func validMimicK8sTg(file string, podSuffix string) []*targetgroup.Group {
+	return []*targetgroup.Group{
+		{
+			Targets: []model.LabelSet{
+				{
+					model.AddressLabel: "242.31.130.15:8080",
+				},
+			},
+			Labels: model.LabelSet{
+				fileSDFilepathLabel:          model.LabelValue(file),
+				"__meta_kubernetes_pod_name": model.LabelValue(fmt.Sprintf("my-pod-%s", podSuffix)),
+				"__meta_kubernetes_pod_uid":  model.LabelValue(fmt.Sprintf("my-pod-uid-%s", podSuffix)),
+			},
+			Source: fileSource(file, 0),
+		},
+	}
 }
 
 func TestRemoveFile(t *testing.T) {
