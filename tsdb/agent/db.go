@@ -1050,6 +1050,7 @@ func (a *appender) AppendCTZeroSample(ref storage.SeriesRef, l labels.Labels, t,
 	}
 
 	series := a.series.GetByID(chunks.HeadSeriesRef(ref))
+	created := false
 	if series == nil {
 		l = l.WithoutEmpty()
 		if l.IsEmpty() {
@@ -1060,7 +1061,8 @@ func (a *appender) AppendCTZeroSample(ref storage.SeriesRef, l labels.Labels, t,
 			return 0, fmt.Errorf(`label name "%s" is not unique: %w`, lbl, tsdb.ErrInvalidSample)
 		}
 
-		newSeries, created := a.getOrCreate(l)
+		var newSeries *memSeries
+		newSeries, created = a.getOrCreate(l)
 		if created {
 			a.pendingSeries = append(a.pendingSeries, record.RefSeries{
 				Ref:    newSeries.ref,

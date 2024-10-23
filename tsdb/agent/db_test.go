@@ -940,6 +940,7 @@ type walSample struct {
 	t    int64
 	f    float64
 	h    *histogram.Histogram
+	fh   *histogram.FloatHistogram
 	lbls labels.Labels
 	ref  storage.SeriesRef
 }
@@ -947,87 +948,101 @@ type walSample struct {
 func TestDBCreatedTimestampSamplesIngestion(t *testing.T) {
 	t.Parallel()
 
-	type appendableSample struct {
-		t            int64
-		ct           int64
-		v            float64
-		lbls         labels.Labels
-		h            *histogram.Histogram
-		expectsError bool
-	}
-
 	testHistogram := tsdbutil.GenerateTestHistograms(1)[0]
-	zeroHistogram := &histogram.Histogram{}
+	testFloatHistogram := tsdbutil.GenerateTestFloatHistogram(1)
 
-	invalidHist := &histogram.Histogram{
-		CustomValues: make([]float64, 0, 1),
+	type appendableSample struct {
+		ts      int64
+		ct      int64
+		fSample float64
+		h       *histogram.Histogram
+		fh      *histogram.FloatHistogram
+		lbls    labels.Labels
 	}
 
 	lbls := labelsForTest(t.Name(), 1)
 	defLbls := labels.New(lbls[0]...)
 
-	testCases := []struct {
-		name                string
-		inputSamples        []appendableSample
-		expectedSamples     []*walSample
-		expectedSeriesCount int
+	for _, tc := range []struct {
+		name              string
+		appendableSamples []appendableSample
+		expectedSamples   []*walSample
 	}{
 		{
-			name: "CT+float && CT+histogram samples",
-			inputSamples: []appendableSample{
-				{
-					t:    100,
-					ct:   30,
-					v:    20,
-					lbls: defLbls,
-				},
-				{
-					t:    300,
-					ct:   230,
-					h:    testHistogram,
-					lbls: defLbls,
-				},
+			name: "In order ct+normal sample/floatSample",
+			appendableSamples: []appendableSample{
+				{ts: 100, fSample: 10, ct: 1, lbls: defLbls},
+				{ts: 101, fSample: 10, ct: 1, lbls: defLbls},
 			},
 			expectedSamples: []*walSample{
-				{t: 30, f: 0, lbls: defLbls},
-				{t: 100, f: 20, lbls: defLbls},
-				{t: 230, h: zeroHistogram, lbls: defLbls},
-				{t: 300, h: testHistogram, lbls: defLbls},
+				{t: 1, f: 0, lbls: defLbls},
+				{t: 100, f: 10, lbls: defLbls},
+				{t: 101, f: 10, lbls: defLbls},
 			},
-			expectedSeriesCount: 1,
 		},
 		{
-			name: "CT+float && CT+histogram samples with error",
-			inputSamples: []appendableSample{
-				{
-					// invalid CT
-					t:            100,
-					ct:           100,
-					v:            0,
-					lbls:         defLbls,
-					expectsError: true,
-				},
-				{
-					// invalid Histogram, will validate
-					t:            200,
-					h:            invalidHist,
-					lbls:         defLbls,
-					expectsError: true,
-				},
-				{
-					// invalid CT histogram
-					t:            300,
-					ct:           300,
-					h:            zeroHistogram,
-					lbls:         defLbls,
-					expectsError: true,
-				},
+			name: "In order ct+normal sample/histogram",
+			appendableSamples: []appendableSample{
+				{ts: 100, h: testHistogram, ct: 1, lbls: defLbls},
+				{ts: 101, h: testHistogram, ct: 1, lbls: defLbls},
 			},
-			expectedSeriesCount: 0,
+			expectedSamples: []*walSample{
+				{t: 1, h: &histogram.Histogram{}, lbls: defLbls},
+				{t: 100, h: testHistogram, lbls: defLbls},
+				{t: 101, h: testHistogram, lbls: defLbls},
+			},
 		},
-	}
-
-	for _, tc := range testCases {
+		{
+			name: "In order ct+normal sample/floathistogram",
+			appendableSamples: []appendableSample{
+				{ts: 100, fh: testFloatHistogram, ct: 1, lbls: defLbls},
+				{ts: 101, fh: testFloatHistogram, ct: 1, lbls: defLbls},
+			},
+			expectedSamples: []*walSample{
+				{t: 1, fh: &histogram.FloatHistogram{}, lbls: defLbls},
+				{t: 100, fh: testFloatHistogram, lbls: defLbls},
+				{t: 101, fh: testFloatHistogram, lbls: defLbls},
+			},
+		},
+		{
+			name: "Consecutive appends with newer ct do not ignore ct/floatSample",
+			appendableSamples: []appendableSample{
+				{ts: 100, fSample: 10, ct: 1, lbls: defLbls},
+				{ts: 102, fSample: 10, ct: 101, lbls: defLbls},
+			},
+			expectedSamples: []*walSample{
+				{t: 1, f: 0, lbls: defLbls},
+				{t: 100, f: 10, lbls: defLbls},
+				{t: 101, f: 0, lbls: defLbls},
+				{t: 102, f: 10, lbls: defLbls},
+			},
+		},
+		{
+			name: "Consecutive appends with newer ct do not ignore ct/histogram",
+			appendableSamples: []appendableSample{
+				{ts: 100, h: testHistogram, ct: 1, lbls: defLbls},
+				{ts: 102, h: testHistogram, ct: 101, lbls: defLbls},
+			},
+			expectedSamples: []*walSample{
+				{t: 1, h: &histogram.Histogram{}, lbls: defLbls},
+				{t: 100, h: testHistogram, lbls: defLbls},
+				{t: 101, h: &histogram.Histogram{}, lbls: defLbls},
+				{t: 102, h: testHistogram, lbls: defLbls},
+			},
+		},
+		{
+			name: "CT equals to previous sample timestamp is ignored/floatSample",
+			appendableSamples: []appendableSample{
+				{ts: 100, fSample: 10, ct: 1, lbls: defLbls},
+				{ts: 101, fSample: 10, ct: 100, lbls: defLbls},
+			},
+			expectedSamples: []*walSample{
+				{t: 1, f: 0, lbls: defLbls},
+				{t: 100, f: 10, lbls: defLbls},
+				{t: 101, f: 10, lbls: defLbls},
+			},
+		},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1037,40 +1052,42 @@ func TestDBCreatedTimestampSamplesIngestion(t *testing.T) {
 			s := createTestAgentDB(t, reg, opts)
 			app := s.Appender(context.TODO())
 
-			for _, sample := range tc.inputSamples {
-				// We supposed to write a Histogram to the WAL
+			for _, sample := range tc.appendableSamples {
 				if sample.h != nil {
-					_, err := app.AppendHistogramCTZeroSample(0, sample.lbls, sample.t, sample.ct, zeroHistogram, nil)
-					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
-
-					_, err = app.AppendHistogram(0, sample.lbls, sample.t, sample.h, nil)
-					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
+					_, err := app.AppendHistogramCTZeroSample(0, sample.lbls, sample.ts, sample.ct, &histogram.Histogram{}, nil)
+					require.NoError(t, err)
+					_, err = app.AppendHistogram(0, sample.lbls, sample.ts, sample.h, nil)
+					require.NoError(t, err)
+				} else if sample.fh != nil {
+					_, err := app.AppendHistogramCTZeroSample(0, sample.lbls, sample.ts, sample.ct, nil, &histogram.FloatHistogram{})
+					require.NoError(t, err)
+					_, err = app.AppendHistogram(0, sample.lbls, sample.ts, nil, sample.fh)
+					require.NoError(t, err)
 				} else {
-					// We supposed to write a float sample to the WAL
-					_, err := app.AppendCTZeroSample(0, sample.lbls, sample.t, sample.ct)
-					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
-					_, err = app.Append(0, sample.lbls, sample.t, sample.v)
-					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
+					_, err := app.AppendCTZeroSample(0, sample.lbls, sample.ts, sample.ct)
+					require.NoError(t, err)
+					_, err = app.Append(0, sample.lbls, sample.ts, sample.fSample)
+					require.NoError(t, err)
 				}
 			}
 
 			require.NoError(t, app.Commit())
-			// Close the DB to ensure all data is flushed to the WAL
 			require.NoError(t, s.Close())
 
 			outputSamples := readWALSamples(t, s.wal.Dir())
 
-			require.Equal(t, len(outputSamples), len(tc.expectedSamples), "Expected %d samples", len(tc.expectedSamples))
+			require.Equal(t, len(tc.expectedSamples), len(outputSamples), "Expected %v samples, got %v", len(tc.expectedSamples), len(outputSamples))
 
-			for _, expectedSample := range tc.expectedSamples {
-				for _, sample := range outputSamples {
-					if sample.t == expectedSample.t && sample.lbls.String() == expectedSample.lbls.String() {
-						if expectedSample.h != nil {
-							require.Equal(t, expectedSample.h, sample.h)
-						} else {
-							require.Equal(t, expectedSample.f, sample.f)
-						}
-					}
+			for i, expectedSample := range tc.expectedSamples {
+				require.Equal(t, expectedSample.t, outputSamples[i].t, "Timestamp mismatch for sample %d", i)
+				require.Equal(t, expectedSample.lbls.String(), outputSamples[i].lbls.String(), "Labels mismatch for sample %d", i)
+
+				if expectedSample.h != nil {
+					require.Equal(t, expectedSample.h, outputSamples[i].h, "Histogram mismatch for sample %d", i)
+				} else if expectedSample.fh != nil {
+					require.Equal(t, expectedSample.fh, outputSamples[i].fh, "Float histogram mismatch for sample %d", i)
+				} else {
+					require.Equal(t, expectedSample.f, outputSamples[i].f, "Float value mismatch for sample %d", i)
 				}
 			}
 		})
@@ -1090,8 +1107,9 @@ func readWALSamples(t *testing.T, walDir string) []*walSample {
 	dec := record.NewDecoder(labels.NewSymbolTable())
 
 	var (
-		samples    []record.RefSample
-		histograms []record.RefHistogramSample
+		samples         []record.RefSample
+		histograms      []record.RefHistogramSample
+		floatHistograms []record.RefFloatHistogramSample
 
 		lastSeries    record.RefSeries
 		outputSamples = make([]*walSample, 0)
@@ -1122,6 +1140,17 @@ func readWALSamples(t *testing.T, walDir string) []*walSample {
 				outputSamples = append(outputSamples, &walSample{
 					t:    h.T,
 					h:    h.H,
+					lbls: lastSeries.Labels.Copy(),
+					ref:  storage.SeriesRef(lastSeries.Ref),
+				})
+			}
+		case record.FloatHistogramSamples:
+			floatHistograms, err = dec.FloatHistogramSamples(rec, floatHistograms[:0])
+			require.NoError(t, err)
+			for _, fh := range floatHistograms {
+				outputSamples = append(outputSamples, &walSample{
+					t:    fh.T,
+					fh:   fh.FH,
 					lbls: lastSeries.Labels.Copy(),
 					ref:  storage.SeriesRef(lastSeries.Ref),
 				})
