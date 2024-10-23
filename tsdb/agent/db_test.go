@@ -970,12 +970,6 @@ func TestDBCreatedTimestampSamplesIngestion(t *testing.T) {
 		name                string
 		inputSamples        []appendableSample
 		expectedSamples     []*walSample
-		appendFunc          func(app storage.Appender, lset labels.Labels, t, ct int64, value interface{}) (storage.SeriesRef, error)
-		appendErrorFunc     func(app storage.Appender, ref storage.SeriesRef, lset labels.Labels, t, ct int64, value interface{}) error
-		value               interface{}
-		expectedSampleCount int
-		expectedType        string
-		expectedErrorMsg    string
 		expectedSeriesCount int
 	}{
 		{
@@ -984,22 +978,12 @@ func TestDBCreatedTimestampSamplesIngestion(t *testing.T) {
 				{
 					t:    100,
 					ct:   30,
-					v:    0,
-					lbls: defLbls,
-				},
-				{
-					t:    200,
 					v:    20,
 					lbls: defLbls,
 				},
 				{
 					t:    300,
 					ct:   230,
-					h:    zeroHistogram,
-					lbls: defLbls,
-				},
-				{
-					t:    400,
 					h:    testHistogram,
 					lbls: defLbls,
 				},
@@ -1056,22 +1040,17 @@ func TestDBCreatedTimestampSamplesIngestion(t *testing.T) {
 			for _, sample := range tc.inputSamples {
 				// We supposed to write a Histogram to the WAL
 				if sample.h != nil {
-					if sample.ct != 0 {
-						_, err := app.AppendHistogramCTZeroSample(0, sample.lbls, sample.t, sample.ct, sample.h, nil)
-						require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
-					} else {
-						_, err := app.AppendHistogram(0, sample.lbls, sample.t, sample.h, nil)
-						require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
-					}
+					_, err := app.AppendHistogramCTZeroSample(0, sample.lbls, sample.t, sample.ct, zeroHistogram, nil)
+					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
+
+					_, err = app.AppendHistogram(0, sample.lbls, sample.t, sample.h, nil)
+					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
 				} else {
 					// We supposed to write a float sample to the WAL
-					if sample.ct != 0 {
-						_, err := app.AppendCTZeroSample(0, sample.lbls, sample.t, sample.ct)
-						require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
-					} else {
-						_, err := app.Append(0, sample.lbls, sample.t, sample.v)
-						require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
-					}
+					_, err := app.AppendCTZeroSample(0, sample.lbls, sample.t, sample.ct)
+					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
+					_, err = app.Append(0, sample.lbls, sample.t, sample.v)
+					require.Equal(t, sample.expectsError, err != nil, "expectedError (%v), got: %v", sample.expectsError, err)
 				}
 			}
 
