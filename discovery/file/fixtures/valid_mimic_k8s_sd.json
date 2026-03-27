@@ -1,0 +1,9 @@
+[
+  {
+    "targets": ["242.31.130.15:8080"],
+    "labels": {
+      "__meta_kubernetes_pod_name": "my-pod-abc",
+      "__meta_kubernetes_pod_uid": "my-pod-uid-abc"
+    }
+  }
+]
